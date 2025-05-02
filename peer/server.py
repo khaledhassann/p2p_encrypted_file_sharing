@@ -9,7 +9,10 @@ from peer.auth import (
     hash_password, verify_password,
     create_session_token, is_session_valid, renew_session
 )
-from peer.crypto_utils import decrypt, load_key
+
+from peer.crypto_utils import encrypt, decrypt, load_key
+
+
 
 # Add this line after imports to load the key once
 KEY = load_key()
@@ -74,10 +77,50 @@ def handle_incoming_peer(conn, addr):
 
         elif command.startswith("DOWNLOAD"):
             if not authenticated:
-                conn.sendall(b"ERROR: Authentication required")
+                conn.sendall(b"ERROR: Authentication required\n")
             else:
-                _, filename = command.split(maxsplit=1)
-                send_encrypted_file(conn, filename)
+                try:
+                    _, filename = command.split(maxsplit=1)
+                    filepath = os.path.join(SHARED_DIR, filename)
+
+                    if not os.path.exists(filepath):
+                        conn.sendall(b"ERROR: File not found\n")
+                        return
+
+                    # Read and encrypt file
+                    with open(filepath, "rb") as f:
+                        plaintext = f.read()
+
+                    ciphertext = encrypt(plaintext, KEY)
+                    filesize = len(ciphertext)
+
+                    # Send size header
+                    conn.sendall(f"SIZE:{filesize}\n".encode())
+
+                    # Wait for READY
+                    ready = conn.recv(5)
+                    if ready != b"READY":
+                        raise ConnectionError("Client not ready")
+
+                    # Send encrypted file in chunks to avoid buffer issues
+                    chunk_size = 8192  # 8KB chunks
+                    bytes_sent = 0
+                    
+                    while bytes_sent < filesize:
+                        remaining = filesize - bytes_sent
+                        chunk = ciphertext[bytes_sent:bytes_sent + min(chunk_size, remaining)]
+                        conn.sendall(chunk)
+                        bytes_sent += len(chunk)
+                        
+                    print(f"[+] File {filename} sent successfully: {bytes_sent}/{filesize} bytes")
+
+                except Exception as e:
+                    print(f"[-] Download error: {e}")
+                    try:
+                        conn.sendall(f"ERROR: {str(e)}\n".encode())
+                    except:
+                        pass  # In case socket already closed
+
 
         elif command.startswith("UPLOAD"):
             if not authenticated:

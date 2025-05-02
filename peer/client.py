@@ -161,67 +161,197 @@ def list_files(ip, port, token):
         data = s.recv(4096).decode()
         print("\n" + data)
 
-
 def download_file(ip, port, token):
+    # Implement a more robust download method
+    s = None
     try:
-        # Increase timeout to handle larger files
-        with socket.create_connection((ip, port), timeout=30) as s:
-            # Get file list and selection
-            s.sendall(f"{token} LIST_FILES".encode())
-            files = s.recv(4096).decode().split("\n")
-            for i, f in enumerate(files, start=1):
-                print(f"{i}. {f}")
-            idx = int(input("File number: ").strip()) - 1
-            filename = files[idx].strip()
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(30)  # Set timeout to 30 seconds
+        s.connect((ip, port))
+        
+        # Get file list
+        s.sendall(f"{token} LIST_FILES".encode())
+        files_data = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            files_data += chunk
+            if len(chunk) < 4096:  # If received less than full buffer, likely done
+                break
+                
+        files = [f.strip() for f in files_data.decode().split("\n") if f.strip()]
+        
+        if not files:
+            print("No files available")
+            if s:
+                s.close()
+            return None
 
-            print(f"[*] Requesting download of '{filename}'...")
-            s.sendall(f"{token} DOWNLOAD {filename}".encode())
-            
-            # Read length header
-            header = b""
-            while b"\n" not in header:
-                chunk = s.recv(1024)
-                if not chunk:
-                    raise ConnectionError("Connection closed while reading header")
-                header += chunk
-            
-            # Parse total length
-            total_len = int(header[:header.index(b"\n")].decode())
-            print(f"[*] File size: {total_len} bytes")
-            
-            # Read file data in chunks
-            ciphertext = b""
-            chunk_size = 8192  # Larger chunk size
-            
-            while len(ciphertext) < total_len:
-                remaining = total_len - len(ciphertext)
-                to_read = min(chunk_size, remaining)
+        for i, f in enumerate(files, 1):
+            print(f"{i}. {f}")
+        try:
+            idx = int(input("File number: ")) - 1
+            filename = files[idx]
+        except (ValueError, IndexError):
+            print("Invalid selection")
+            if s:
+                s.close()
+            return None
+
+        # Close the first connection
+        s.close()
+        
+        # Create a new connection for the download
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(60)  # Longer timeout for download
+        s.connect((ip, port))
+        
+        # Request download
+        s.sendall(f"{token} DOWNLOAD {filename}".encode())
+
+        # Read size header or error
+        header = b""
+        while b"\n" not in header:
+            chunk = s.recv(1)
+            if not chunk:
+                raise ConnectionError("Connection closed while reading header")
+            header += chunk
+
+        if header.startswith(b"ERROR:"):
+            print(f"\n[-] Server error: {header.decode()}")
+            s.close()
+            return None
+
+        # Extract size from the header
+        try:
+            size_part = header[:header.index(b"\n")].decode()
+            if not size_part.startswith("SIZE:"):
+                print("\n[-] Invalid server response format")
+                s.close()
+                return None
                 
-                chunk = s.recv(to_read)
-                if not chunk:
-                    raise ConnectionError(f"Connection closed after receiving {len(ciphertext)} of {total_len} bytes")
-                
-                ciphertext += chunk
-                percent = (len(ciphertext) / total_len) * 100
-                print(f"\rDownloading: {percent:.1f}% ({len(ciphertext)}/{total_len} bytes)", end="", flush=True)
-            
-            print("\n[*] Download complete, decrypting...")
+            filesize = int(size_part[5:])
+            print(f"Downloading {filesize} bytes...")
+        except (ValueError, IndexError) as e:
+            print(f"\n[-] Invalid size format: {e}")
+            s.close()
+            return None
+
+        # Send READY signal
+        s.sendall(b"READY")
+
+        # Download encrypted bytes with progress reporting
+        received = 0
+        ciphertext = b""
+        
+        while received < filesize:
+            remaining = filesize - received
+            chunk_size = min(8192, remaining)
             
             try:
-                plaintext = decrypt(ciphertext, KEY)
-                os.makedirs(RECEIVED_DIR, exist_ok=True)
-                out_path = os.path.join(RECEIVED_DIR, filename)
+                chunk = s.recv(chunk_size)
+                if not chunk:
+                    # If server closed connection but we haven't received all data
+                    if received < filesize:
+                        print(f"\n[-] Connection closed after receiving {received}/{filesize} bytes")
+                        s.close()
+                        return None
+                    break
+                    
+                ciphertext += chunk
+                received += len(chunk)
+                print(f"\r{received}/{filesize} bytes ({received/filesize:.1%})", end="", flush=True)
                 
-                with open(out_path, "wb") as f:
-                    f.write(plaintext)
-                print(f"[+] File saved to {out_path}")
-                
-            except Exception as e:
-                raise Exception(f"Decryption/save failed: {str(e)}")
-                
+            except socket.timeout:
+                print("\n[-] Timeout while downloading")
+                s.close()
+                return None
+
+        print("\n[+] Download complete, decrypting...")
+
+        # Decrypt and save
+        try:
+            plaintext = decrypt(ciphertext, KEY)
+            os.makedirs(RECEIVED_DIR, exist_ok=True)
+            out_path = os.path.join(RECEIVED_DIR, filename)
+            with open(out_path, "wb") as f:
+                f.write(plaintext)
+            print(f"[+] File saved to {out_path}")
+            s.close()
+            return out_path
+        except Exception as e:
+            print(f"\n[-] Decryption failed: {e}")
+            s.close()
+            return None
+
     except Exception as e:
-        print(f"[-] Download failed: {str(e)}")
+        print(f"\n[-] Download failed: {e}")
+        if s:
+            s.close()
         return None
+
+
+# def download_file(ip, port, token):
+#     try:
+#         # Increase timeout to handle larger files
+#         with socket.create_connection((ip, port), timeout=30) as s:
+#             # Get file list and selection
+#             s.sendall(f"{token} LIST_FILES".encode())
+#             files = s.recv(4096).decode().split("\n")
+#             for i, f in enumerate(files, start=1):
+#                 print(f"{i}. {f}")
+#             idx = int(input("File number: ").strip()) - 1
+#             filename = files[idx].strip()
+
+#             print(f"[*] Requesting download of '{filename}'...")
+#             s.sendall(f"{token} DOWNLOAD {filename}".encode())
+            
+#             # Read length header
+#             header = b""
+#             while b"\n" not in header:
+#                 chunk = s.recv(1024)
+#                 if not chunk:
+#                     raise ConnectionError("Connection closed while reading header")
+#                 header += chunk
+            
+#             # Parse total length
+#             total_len = int(header[:header.index(b"\n")].decode())
+#             print(f"[*] File size: {total_len} bytes")
+            
+#             # Read file data in chunks
+#             ciphertext = b""
+#             chunk_size = 8192  # Larger chunk size
+            
+#             while len(ciphertext) < total_len:
+#                 remaining = total_len - len(ciphertext)
+#                 to_read = min(chunk_size, remaining)
+                
+#                 chunk = s.recv(to_read)
+#                 if not chunk:
+#                     raise ConnectionError(f"Connection closed after receiving {len(ciphertext)} of {total_len} bytes")
+                
+#                 ciphertext += chunk
+#                 percent = (len(ciphertext) / total_len) * 100
+#                 print(f"\rDownloading: {percent:.1f}% ({len(ciphertext)}/{total_len} bytes)", end="", flush=True)
+            
+#             print("\n[*] Download complete, decrypting...")
+            
+#             try:
+#                 plaintext = decrypt(ciphertext, KEY)
+#                 os.makedirs(RECEIVED_DIR, exist_ok=True)
+#                 out_path = os.path.join(RECEIVED_DIR, filename)
+                
+#                 with open(out_path, "wb") as f:
+#                     f.write(plaintext)
+#                 print(f"[+] File saved to {out_path}")
+                
+#             except Exception as e:
+#                 raise Exception(f"Decryption/save failed: {str(e)}")
+                
+#     except Exception as e:
+#         print(f"[-] Download failed: {str(e)}")
+#         return None
 
 
 def upload_file(ip, port, token):
