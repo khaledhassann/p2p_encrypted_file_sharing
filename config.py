@@ -18,3 +18,6 @@ KEY_FILE = os.path.join(USER_DATA_DIR, "key.bin")
 # Session settings
 SESSION_TIMEOUT = 30    # minutes
 RENDEZVOUS_PORT = 5000  # port for the rendezvous tracker
+DISCOVERY_PORT = 50000  # UDP port for LAN broadcast discovery
+TCP_DEFAULT_PORT = 5001    # fallback port for peer server
+

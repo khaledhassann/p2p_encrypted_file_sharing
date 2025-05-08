@@ -1,41 +1,33 @@
-# run_peer.py
-
 import threading
 import socket
-from config import RENDEZVOUS_PORT
-from peer.server import start_peer_server
-from peer.client import peer_client_menu
+from config          import DISCOVERY_PORT, TCP_DEFAULT_PORT
+from peer.server     import start_peer_server
+from peer.client     import peer_client_menu
+from peer.discovery  import respond_to_discovery, discover_peers
 
 def main():
-    # 1) Ask your own listening port
-    my_port = int(input("Enter your peer server port: ").strip())
+    # 1) Choose your TCP port
+    port = input(f"Enter your peer server port [{TCP_DEFAULT_PORT}]: ").strip()
+    try:
+        port = int(port) if port else TCP_DEFAULT_PORT
+    except ValueError:
+        port = TCP_DEFAULT_PORT
 
-    # 2) Ask the rendezvous server address
-    rendezvous_ip = input("Enter Rendezvous Server IP [127.0.0.1]: ").strip() or "127.0.0.1"
+    # 2) Start your file-share server
+    threading.Thread(target=start_peer_server, args=(port,), daemon=True).start()
+    print(f"[*] Peer server listening on TCP port {port}")
 
-    # 3) Start your peer server in background
-    threading.Thread(target=start_peer_server, args=(my_port,), daemon=True).start()
+    # 3) Start the discovery responder
+    threading.Thread(target=respond_to_discovery, args=(port,), daemon=True).start()
+    print(f"[*] Discovery responder listening on UDP port {DISCOVERY_PORT}")
 
-    # 4) Register yourself with the rendezvous server
-    my_ip = socket.gethostbyname(socket.gethostname())
-    with socket.create_connection((rendezvous_ip, RENDEZVOUS_PORT)) as s:
-        s.sendall(f"REGISTER {my_ip} {my_port}".encode())
-        data = s.recv(4096).decode()
+    # 4) Probe the LAN to find peers
+    print("[*] Broadcasting on LAN to find peers…")
+    peers = discover_peers(timeout=2.0)
+    print(f"[+] Discovered peers: {peers}")
 
-    # 5) Parse list of known peers
-    peers = []
-    for line in data.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        ip, port = line.split()
-        peers.append((ip, int(port)))
-
-    print("[+] Discovered peers:", peers)
-
-    # 6) Enter the interactive menu with necessary info
-    peer_client_menu(peers, my_port)  # Pass my_port as parameter
-
+    # 5) Enter your interactive CLI
+    peer_client_menu(peers)
 
 if __name__ == "__main__":
     main()

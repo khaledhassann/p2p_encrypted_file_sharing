@@ -4,88 +4,60 @@ import os
 import socket
 import tkinter as tk
 from tkinter import filedialog
-from config import RECEIVED_DIR, RENDEZVOUS_PORT
+from config import RECEIVED_DIR, DISCOVERY_PORT
+from peer.discovery import discover_peers
 from peer.crypto_utils import load_key, encrypt, decrypt
-import threading
 import time
 
 # Load (or generate) the AES-GCM key once
 KEY = load_key()
 
-def update_peer_list(rendezvous_ip, my_ip, my_port):
-    """Get updated peer list from rendezvous server"""
-    try:
-        with socket.create_connection((rendezvous_ip, RENDEZVOUS_PORT)) as s:
-            s.sendall(f"REGISTER {my_ip} {my_port}".encode())
-            data = s.recv(4096).decode()
-            
-            # Handle empty response (no other peers)
-            if not data.strip():
-                print("[*] No other peers registered")
-                return []
+def peer_client_menu(peers):
 
-            new_peers = []
-            for line in data.split("\n"):
-                line = line.strip()
-                if line:
-                    try:
-                        ip, port = line.split()
-                        port = int(port)
-                        if (ip, port) != (my_ip, my_port):  # Don't add ourselves
-                            new_peers.append((ip, port))
-                            print(f"[+] Found peer: {ip}:{port}")
-                    except ValueError as e:
-                        print(f"[-] Invalid peer data: {line}")
-                        continue
-            return new_peers
-    except Exception as e:
-        print(f"[-] Failed to update peer list: {e}")
-        return None
-
-def peer_client_menu(peers, my_port):  # Add my_port parameter
     session_tokens = {}
-    last_update = time.time()
-    update_interval = 10  # seconds
-    
-    # Get my own IP
-    my_ip = socket.gethostbyname(socket.gethostname())
 
     while True:
-        # Periodically update peer list
-        current_time = time.time()
-        if current_time - last_update > update_interval:
-            print("[*] Updating peer list...")
-            new_peers = update_peer_list("127.0.0.1", my_ip, my_port)  # Use passed-in my_port
-            if new_peers is not None:  # Only update if successful
-                peers = new_peers
-            last_update = current_time
-
-        # Add debug output
-        print(f"[*] Checking {len(peers)} peers...")
-        # Remove disconnected peers with debug info
+        # 1) Prune any peers that have gone offline
         active_peers = []
         for ip, port in peers:
             if check_peer_alive(ip, port):
                 active_peers.append((ip, port))
-                print(f"[+] Peer {ip}:{port} is alive")
         peers = active_peers
-        
+
         if not peers:
-            print("[!] No active peers available")
-            print("[*] Waiting for peers to connect...")
-            time.sleep(5)  # Wait 5 seconds before checking again
-            continue  # Instead of return, continue the loop
-            
+            print("[!] No active peers available.")
+        else:
+            print(f"[*] {len(peers)} peer(s) online.")
+
+        # 2) Show menu
         print("\n=== Peer Client Menu ===")
         print("1. Login/Register to a peer")
         print("2. List files on a peer")
         print("3. Download file from a peer")
         print("4. Upload file to a peer")
-        print("5. Exit")
+        print("5. Discover peers on LAN")
+        print("6. Exit")
 
-        choice = input("Select an option (1-5): ").strip()
-        if choice == "5":
+        choice = input("Select an option (1-6): ").strip()
+
+        # 3) Exit
+        if choice == "6":
             break
+
+        # 4) Manual discovery
+        if choice == "5":
+            print(f"[*] Broadcasting discovery on UDP port {DISCOVERY_PORT}...")
+            new_peers = discover_peers(timeout=2.0)
+            if new_peers:
+                print(f"[+] Found peers: {new_peers}")
+                for p in new_peers:
+                    if p not in peers:
+                        peers.append(p)
+            else:
+                print("[*] No new peers found.")
+            continue  # back to top of loop
+
+        # 5) Actions 1–4 require selecting a peer
         if choice not in {"1", "2", "3", "4"}:
             continue
 
@@ -93,16 +65,17 @@ def peer_client_menu(peers, my_port):  # Add my_port parameter
         if peer_ip is None:
             continue
 
+        # 6) Perform the chosen action
         if choice == "1":
             token = authenticate_with_peer(peer_ip, peer_port)
             if token:
                 session_tokens[(peer_ip, peer_port)] = token
-
         else:
             token = session_tokens.get((peer_ip, peer_port))
             if not token:
                 print("Please login/register to this peer first!")
                 continue
+
             if choice == "2":
                 list_files(peer_ip, peer_port, token)
             elif choice == "3":

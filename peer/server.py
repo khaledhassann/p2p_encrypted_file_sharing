@@ -3,18 +3,15 @@
 import os
 import socket
 import threading
-from config import RENDEZVOUS_PORT, SHARED_DIR, KEY_FILE
+from config import SHARED_DIR              # removed RENDEZVOUS_PORT, KEY_FILE
 from peer.auth import (
     load_user_data, save_user_data,
     hash_password, verify_password,
     create_session_token, is_session_valid, renew_session
 )
-
 from peer.crypto_utils import encrypt, decrypt, load_key
 
-
-
-# Add this line after imports to load the key once
+# Load the AES key once
 KEY = load_key()
 
 from peer.file_ops import list_shared_files, send_encrypted_file, receive_encrypted_file
@@ -24,20 +21,20 @@ def handle_incoming_peer(conn, addr):
         data = conn.recv(1024)
         if not data:
             return
-            
-        # Add PING handling before other commands
+
+        # Ping handler
         if data == b"PING":
             conn.sendall(b"PONG")
             return
-            
-        # Convert to string for other commands
+
+        # Decode command
         data = data.decode().strip()
 
-        # Check for existing session token
+        # Check session token
         parts = data.split(maxsplit=1)
         if len(parts[0]) == 32 and is_session_valid(parts[0]):
-            token     = parts[0]
-            command   = parts[1] if len(parts) > 1 else ""
+            token        = parts[0]
+            command      = parts[1] if len(parts) > 1 else ""
             authenticated = True
             renew_session(token)
         else:
@@ -46,6 +43,7 @@ def handle_incoming_peer(conn, addr):
 
         users = load_user_data()
 
+        # Registration
         if command.startswith("REGISTER"):
             _, username, password = command.split(maxsplit=2)
             if username in users:
@@ -56,6 +54,7 @@ def handle_incoming_peer(conn, addr):
                 save_user_data(users)
                 conn.sendall(b"OK: Registration successful")
 
+        # Login
         elif command.startswith("LOGIN"):
             _, username, password = command.split(maxsplit=2)
             if username not in users:
@@ -68,6 +67,7 @@ def handle_incoming_peer(conn, addr):
                 else:
                     conn.sendall(b"ERROR: Invalid password")
 
+        # List files
         elif command == "LIST_FILES":
             if not authenticated:
                 conn.sendall(b"ERROR: Authentication required")
@@ -75,6 +75,7 @@ def handle_incoming_peer(conn, addr):
                 files = list_shared_files()
                 conn.sendall("\n".join(files).encode())
 
+        # Download
         elif command.startswith("DOWNLOAD"):
             if not authenticated:
                 conn.sendall(b"ERROR: Authentication required\n")
@@ -82,46 +83,37 @@ def handle_incoming_peer(conn, addr):
                 try:
                     _, filename = command.split(maxsplit=1)
                     filepath = os.path.join(SHARED_DIR, filename)
-
                     if not os.path.exists(filepath):
                         conn.sendall(b"ERROR: File not found\n")
                         return
 
-                    # Read and encrypt file
+                    # Read, encrypt, and send
                     with open(filepath, "rb") as f:
                         plaintext = f.read()
-
                     ciphertext = encrypt(plaintext, KEY)
                     filesize = len(ciphertext)
 
-                    # Send size header
+                    # Header + READY handshake
                     conn.sendall(f"SIZE:{filesize}\n".encode())
-
-                    # Wait for READY
                     ready = conn.recv(5)
                     if ready != b"READY":
                         raise ConnectionError("Client not ready")
 
-                    # Send encrypted file in chunks to avoid buffer issues
-                    chunk_size = 8192  # 8KB chunks
-                    bytes_sent = 0
-                    
-                    while bytes_sent < filesize:
-                        remaining = filesize - bytes_sent
-                        chunk = ciphertext[bytes_sent:bytes_sent + min(chunk_size, remaining)]
+                    # Stream encrypted file in chunks
+                    chunk_size = 8192
+                    sent = 0
+                    while sent < filesize:
+                        chunk = ciphertext[sent:sent + chunk_size]
                         conn.sendall(chunk)
-                        bytes_sent += len(chunk)
-                        
-                    print(f"[+] File {filename} sent successfully: {bytes_sent}/{filesize} bytes")
+                        sent += len(chunk)
+                    print(f"[+] File {filename} sent: {sent}/{filesize} bytes")
 
                 except Exception as e:
                     print(f"[-] Download error: {e}")
-                    try:
-                        conn.sendall(f"ERROR: {str(e)}\n".encode())
-                    except:
-                        pass  # In case socket already closed
+                    try: conn.sendall(f"ERROR: {e}\n".encode())
+                    except: pass
 
-
+        # Upload
         elif command.startswith("UPLOAD"):
             if not authenticated:
                 conn.sendall(b"ERROR: Authentication required")
@@ -131,35 +123,33 @@ def handle_incoming_peer(conn, addr):
                     conn.sendall(b"ERROR: Invalid filename")
                 else:
                     try:
-                        # Signal ready to receive
                         conn.sendall(b"READY")
-                        
                         # Read length header
                         header = b""
                         while not header.endswith(b"\n"):
                             header += conn.recv(1)
                         total_len = int(header.decode().strip())
-                        
-                        # Read exact number of bytes
+
+                        # Read ciphertext exactly
                         ciphertext = b""
                         while len(ciphertext) < total_len:
                             chunk = conn.recv(min(4096, total_len - len(ciphertext)))
                             if not chunk:
                                 raise ConnectionError("Connection closed during upload")
                             ciphertext += chunk
-                        
-                        # Decrypt and save
+
+                        # Decrypt and save to shared_files
                         plaintext = decrypt(ciphertext, KEY)
                         out_path = os.path.join(SHARED_DIR, filename)
                         with open(out_path, "wb") as f:
                             f.write(plaintext)
-                        
+
                         print(f"[+] Received file '{filename}' from {addr}")
                         conn.sendall(b"OK: File uploaded successfully")
-                    
+
                     except Exception as e:
                         print(f"[-] Upload error: {e}")
-                        conn.sendall(f"ERROR: Upload failed - {str(e)}".encode())
+                        conn.sendall(f"ERROR: Upload failed - {e}".encode())
 
         else:
             conn.sendall(b"ERROR: Unknown command")
@@ -176,4 +166,8 @@ def start_peer_server(port):
         print(f"[*] Peer server listening on port {port}...")
         while True:
             conn, addr = s.accept()
-            threading.Thread(target=handle_incoming_peer, args=(conn, addr), daemon=True).start()
+            threading.Thread(
+                target=handle_incoming_peer,
+                args=(conn, addr),
+                daemon=True
+            ).start()
