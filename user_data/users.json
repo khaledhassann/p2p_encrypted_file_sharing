@@ -1,22 +1,8 @@
 {
   "khaled": {
-    "password_hash": "a7ae72c2c30f82e2e8917a8c636e6af13ad8a4788dd8278ab851f39f088bee65",
-    "salt": "e5cf31c9d26e54f43ebda7ef8eda7b1a"
+    "password_hash": "$argon2id$v=19$m=102400,t=2,p=8$2tjKpkytLi4bCLqHgtatLg$0gwA9Ec9MFGJWzo85LA0InyYY2l/lRJiCmMTf12S7NA"
   },
   "khaled2": {
-    "password_hash": "463beb366a4a5fac8207c355aab1c64a82c89a2f9dffdd411075ad15915d7dca",
-    "salt": "6a20a3986e31177f58a25e9c0e044216"
-  },
-  "khaled3": {
-    "password_hash": "e07beb01891a5904f4190a488bbd334c603585de3f4697afc2fe7f1e0a71cbbb",
-    "salt": "62173be793087f06a49f7ddec26c0559"
-  },
-  "test-user-01": {
-    "password_hash": "b555d7dc8503fb6aaf2904112d21f691293350241c6d8e1b90084ff9e066289c",
-    "salt": "b0079fca312ba2582d5f6202ede5b0d6"
-  },
-  "pass123": {
-    "password_hash": "e244f222105a726bf9bb44ad88f6a499d29072541ece3b3a7ceaa80a99825d04",
-    "salt": "08c968f191f145085cab325543dd8909"
+    "password_hash": "$argon2id$v=19$m=102400,t=2,p=8$GxD7KhnB0jCk/fbkMms9IA$vDjafMkQaYMs9tKIqRrWib7C5Bm0Jy8RsQviENLI3uA"
   }
 }

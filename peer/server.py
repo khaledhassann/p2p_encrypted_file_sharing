@@ -49,8 +49,8 @@ def handle_incoming_peer(conn, addr):
             if username in users:
                 conn.sendall(b"ERROR: Username already exists")
             else:
-                pwd_hash, salt = hash_password(password)
-                users[username] = {"password_hash": pwd_hash, "salt": salt}
+                argon_hash = hash_password(password)
+                users[username] = {"password_hash": argon_hash}
                 save_user_data(users)
                 conn.sendall(b"OK: Registration successful")
 
@@ -61,7 +61,7 @@ def handle_incoming_peer(conn, addr):
                 conn.sendall(b"ERROR: User not found")
             else:
                 udata = users[username]
-                if verify_password(udata["password_hash"], udata["salt"], password):
+                if verify_password(udata["password_hash"], password):
                     token = create_session_token(username)
                     conn.sendall(f"OK: {token}".encode())
                 else:
